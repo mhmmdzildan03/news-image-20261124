@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """One-day world news poster for Tuesday 24 November 2026.
 
-Renders a 1024x1024 newspaper front page to /output/entry.png using
-only the Python standard library. Every glyph of the 5x7 typeface is
-stored as seven integers, one per row, whose five low bits are the
-row's pixels. The picture is painted on a plain pixel canvas, so two
-runs always write the same bytes: no assets, no network, no clock.
+Paints a 1024x1024 newspaper front page and saves it as a PNG at
+/output/entry.png. Standard library only. The 5x7 typeface is kept
+as seven integers per character, one integer per row, the five low
+bits of each integer being that row's pixels from left to right.
+All drawing happens on one flat pixel buffer, so the output bytes
+never change between runs: no assets, no network, no clock.
 """
 
 import os
@@ -16,21 +17,21 @@ import zlib
 WIDTH = 1024
 HEIGHT = 1024
 
-PAPER = (246, 241, 227)
-INK = (22, 27, 43)
-NAVY = (18, 42, 86)
-RED = (178, 34, 40)
-BLUE = (33, 84, 158)
-TEAL = (14, 116, 110)
-ORANGE = (232, 119, 34)
-GOLD = (196, 148, 32)
-GREY = (96, 100, 110)
-WHITE = (255, 253, 246)
-SMOKE = (150, 148, 140)
+SHEET = (246, 241, 227)
+BLACK = (22, 27, 43)
+MARINE = (18, 42, 86)
+CRIMSON = (178, 34, 40)
+AZURE = (33, 84, 158)
+PINE = (14, 116, 110)
+AMBER = (232, 119, 34)
+OCHRE = (196, 148, 32)
+SLATE = (96, 100, 110)
+CREAM = (255, 253, 246)
+ASH = (150, 148, 140)
 
-# ------------------------------------------------------------- typeface
+# ------------------------------------------------------------ typeface
 # Seven rows per glyph; in each row, bit 16 is the leftmost pixel.
-FONT = {
+TYPEFACE = {
     "A": (14, 17, 17, 31, 17, 17, 17), "B": (30, 17, 17, 30, 17, 17, 30),
     "C": (15, 16, 16, 16, 16, 16, 15), "D": (30, 17, 17, 17, 17, 17, 30),
     "E": (31, 16, 16, 30, 16, 16, 31), "F": (31, 16, 16, 30, 16, 16, 16),
@@ -62,29 +63,29 @@ FONT = {
 }
 
 
-def glyph(ch):
-    if ch in FONT:
-        return FONT[ch]
+def glyph_rows(ch):
+    if ch in TYPEFACE:
+        return TYPEFACE[ch]
     if ch in "•·":
         return (0, 0, 14, 14, 14, 0, 0)
     if ch == "—":
-        return FONT["-"]
-    return FONT["?"]
+        return TYPEFACE["-"]
+    return TYPEFACE["?"]
 
 
-# --------------------------------------------------------------- canvas
-class Canvas:
+# --------------------------------------------------------------- poster
+class Poster:
     def __init__(self, w, h, bg):
         self.w = w
         self.h = h
-        self.px = bytearray(bg * (w * h))
+        self.pix = bytearray(bg * (w * h))
 
-    def set(self, x, y, colour):
+    def put(self, x, y, colour):
         if 0 <= x < self.w and 0 <= y < self.h:
             i = (y * self.w + x) * 3
-            self.px[i:i + 3] = bytes(colour)
+            self.pix[i:i + 3] = bytes(colour)
 
-    def rect(self, x, y, w, h, colour):
+    def box(self, x, y, w, h, colour):
         x0 = max(0, x)
         y0 = max(0, y)
         x1 = min(self.w, x + w)
@@ -92,35 +93,35 @@ class Canvas:
         row = bytes(colour) * max(0, x1 - x0)
         for yy in range(y0, y1):
             i = (yy * self.w + x0) * 3
-            self.px[i:i + len(row)] = row
+            self.pix[i:i + len(row)] = row
 
-    def frame(self, x, y, w, h, colour, t=3):
-        self.rect(x, y, w, t, colour)
-        self.rect(x, y + h - t, w, t, colour)
-        self.rect(x, y, t, h, colour)
-        self.rect(x + w - t, y, t, h, colour)
+    def border(self, x, y, w, h, colour, t=3):
+        self.box(x, y, w, t, colour)
+        self.box(x, y + h - t, w, t, colour)
+        self.box(x, y, t, h, colour)
+        self.box(x + w - t, y, t, h, colour)
 
-    def line(self, x0, y0, x1, y1, colour, t=3):
+    def stroke(self, x0, y0, x1, y1, colour, t=3):
         steps = max(abs(x1 - x0), abs(y1 - y0), 1)
         r = max(1, t // 2)
         for s in range(steps + 1):
             cx = x0 + (x1 - x0) * s // steps
             cy = y0 + (y1 - y0) * s // steps
-            self.rect(cx - r, cy - r, t, t, colour)
+            self.box(cx - r, cy - r, t, t, colour)
 
-    def disc(self, cx, cy, rad, colour):
+    def dot(self, cx, cy, rad, colour):
         for yy in range(cy - rad, cy + rad + 1):
             span = int((rad * rad - (yy - cy) ** 2) ** 0.5)
-            self.rect(cx - span, yy, span * 2 + 1, 1, colour)
+            self.box(cx - span, yy, span * 2 + 1, 1, colour)
 
-    def ring(self, cx, cy, rad, colour, t=4):
+    def circle(self, cx, cy, rad, colour, t=4):
         for yy in range(cy - rad - t, cy + rad + t + 1):
             for xx in range(cx - rad - t, cx + rad + t + 1):
                 d = ((xx - cx) ** 2 + (yy - cy) ** 2) ** 0.5
                 if rad - t <= d <= rad:
-                    self.set(xx, yy, colour)
+                    self.put(xx, yy, colour)
 
-    def poly(self, points, colour):
+    def shape(self, points, colour):
         ys = [p[1] for p in points]
         for yy in range(min(ys), max(ys) + 1):
             xs = []
@@ -132,159 +133,159 @@ class Canvas:
                     xs.append(x0 + (yy - y0) * (x1 - x0) // (y1 - y0))
             xs.sort()
             for i in range(0, len(xs) - 1, 2):
-                self.rect(xs[i], yy, xs[i + 1] - xs[i] + 1, 1, colour)
+                self.box(xs[i], yy, xs[i + 1] - xs[i] + 1, 1, colour)
 
     # -------------------------------------------------------------- text
-    def text_width(self, s, scale):
+    def measure(self, s, scale):
         return len(s) * 6 * scale - scale
 
-    def text(self, x, y, s, scale, colour, bold=False):
+    def type(self, x, y, s, scale, colour, bold=False):
         cx = x
         for ch in s.upper():
-            rows = glyph(ch)
+            rows = glyph_rows(ch)
             for ry, bits in enumerate(rows):
                 for rx in range(5):
                     if bits & (16 >> rx):
-                        self.rect(cx + rx * scale, y + ry * scale,
-                                  scale, scale, colour)
+                        self.box(cx + rx * scale, y + ry * scale,
+                                 scale, scale, colour)
                         if bold:
-                            self.rect(cx + rx * scale + scale // 2,
-                                      y + ry * scale, scale, scale, colour)
+                            self.box(cx + rx * scale + scale // 2,
+                                     y + ry * scale, scale, scale, colour)
             cx += 6 * scale
         return cx - scale
 
-    def text_centred(self, cx, y, s, scale, colour, bold=False):
-        return self.text(cx - self.text_width(s, scale) // 2, y, s,
+    def type_mid(self, cx, y, s, scale, colour, bold=False):
+        return self.type(cx - self.measure(s, scale) // 2, y, s,
                          scale, colour, bold)
 
-    def text_block(self, x, y, lines, scale, colour, gap=6, bold=False):
+    def type_lines(self, x, y, lines, scale, colour, gap=6, bold=False):
         for line in lines:
-            self.text(x, y, line, scale, colour, bold)
+            self.type(x, y, line, scale, colour, bold)
             y += 7 * scale + gap
         return y
 
 
-# ---------------------------------------------------------------- icons
-def icon_globe(cv, cx, cy, rad):
+# ---------------------------------------------------------------- marks
+def draw_globe(pg, cx, cy, rad):
     # a wire globe on two smoking stacks: the climate story in one mark
-    cv.ring(cx, cy, rad, NAVY, 5)
-    cv.line(cx - rad, cy, cx + rad, cy, NAVY, 4)
+    pg.circle(cx, cy, rad, MARINE, 5)
+    pg.stroke(cx - rad, cy, cx + rad, cy, MARINE, 4)
     for dx in (-rad // 2, 0, rad // 2):
         w = int((rad * rad - dx * dx) ** 0.5)
-        cv.line(cx + dx, cy - w, cx + dx, cy + w, NAVY, 3)
+        pg.stroke(cx + dx, cy - w, cx + dx, cy + w, MARINE, 3)
     base = cy + rad + 10
-    cv.rect(cx - rad + 6, base, 18, 26, INK)
-    cv.rect(cx + rad - 24, base, 18, 26, INK)
-    cv.disc(cx - rad + 15, base - 10, 8, SMOKE)
-    cv.disc(cx - rad + 25, base - 20, 10, SMOKE)
-    cv.disc(cx + rad - 15, base - 10, 8, SMOKE)
-    cv.disc(cx + rad - 27, base - 21, 11, SMOKE)
-    cv.rect(cx - rad - 6, base + 26, rad * 2 + 12, 6, RED)
+    pg.box(cx - rad + 6, base, 18, 26, BLACK)
+    pg.box(cx + rad - 24, base, 18, 26, BLACK)
+    pg.dot(cx - rad + 15, base - 10, 8, ASH)
+    pg.dot(cx - rad + 25, base - 20, 10, ASH)
+    pg.dot(cx + rad - 15, base - 10, 8, ASH)
+    pg.dot(cx + rad - 27, base - 21, 11, ASH)
+    pg.box(cx - rad - 6, base + 26, rad * 2 + 12, 6, CRIMSON)
 
 
-def icon_tanker(cv, x, y):
+def draw_tanker(pg, x, y):
     # compact tanker, hull and waves in a 76x54 box at x, y
-    cv.poly([(x, y + 20), (x + 76, y + 20), (x + 64, y + 36),
-             (x + 12, y + 36)], NAVY)
-    cv.rect(x + 29, y + 7, 18, 13, RED)
-    cv.rect(x + 4, y + 14, 20, 6, INK)
-    cv.rect(x + 54, y + 14, 18, 6, INK)
+    pg.shape([(x, y + 20), (x + 76, y + 20), (x + 64, y + 36),
+              (x + 12, y + 36)], MARINE)
+    pg.box(x + 29, y + 7, 18, 13, CRIMSON)
+    pg.box(x + 4, y + 14, 20, 6, BLACK)
+    pg.box(x + 54, y + 14, 18, 6, BLACK)
     for i in range(3):
         wx = x + 2 + i * 25
-        cv.line(wx, y + 48, wx + 7, y + 43, BLUE, 4)
-        cv.line(wx + 7, y + 43, wx + 14, y + 48, BLUE, 4)
+        pg.stroke(wx, y + 48, wx + 7, y + 43, AZURE, 4)
+        pg.stroke(wx + 7, y + 43, wx + 14, y + 48, AZURE, 4)
     # intercept burst above the stern
     bx, by = x + 64, y + 2
     for dx, dy in ((0, -8), (7, -6), (9, 2), (-7, -6), (-9, 2)):
-        cv.line(bx, by, bx + dx, by + dy, GOLD, 4)
-    cv.disc(bx, by, 4, ORANGE)
+        pg.stroke(bx, by, bx + dx, by + dy, OCHRE, 4)
+    pg.dot(bx, by, 4, AMBER)
 
 
-def icon_block(cv, x, y):
+def draw_block(pg, x, y):
     # five-storey block, one corner fallen to rubble, in a 92x80 box
-    cv.rect(x, y, 56, 80, NAVY)
+    pg.box(x, y, 56, 80, MARINE)
     for floor in range(5):
         for win in range(2):
-            cv.rect(x + 9 + win * 24, y + 8 + floor * 15, 13, 9, GOLD)
-    cv.poly([(x + 56, y + 34), (x + 92, y + 80), (x + 56, y + 80)], GREY)
-    cv.poly([(x + 44, y + 68), (x + 70, y + 48), (x + 92, y + 80),
-             (x + 44, y + 80)], INK)
-    cv.line(x + 56, y + 2, x + 76, y + 26, RED, 5)
+            pg.box(x + 9 + win * 24, y + 8 + floor * 15, 13, 9, OCHRE)
+    pg.shape([(x + 56, y + 34), (x + 92, y + 80), (x + 56, y + 80)], SLATE)
+    pg.shape([(x + 44, y + 68), (x + 70, y + 48), (x + 92, y + 80),
+              (x + 44, y + 80)], BLACK)
+    pg.stroke(x + 56, y + 2, x + 76, y + 26, CRIMSON, 5)
 
 
-def icon_factory(cv, x, y):
+def draw_factory(pg, x, y):
     # factory with a sawtooth roof in a 92x80 box at x, y
-    cv.rect(x, y + 30, 92, 42, INK)
+    pg.box(x, y + 30, 92, 42, BLACK)
     for i in range(3):
         bx = x + i * 28
-        cv.poly([(bx, y + 30), (bx + 13, y + 16), (bx + 28, y + 30)], INK)
-    cv.rect(x + 76, y + 2, 11, 30, INK)
+        pg.shape([(bx, y + 30), (bx + 13, y + 16), (bx + 28, y + 30)], BLACK)
+    pg.box(x + 76, y + 2, 11, 30, BLACK)
     for win in range(3):
-        cv.rect(x + 9 + win * 28, y + 44, 17, 13, GOLD)
+        pg.box(x + 9 + win * 28, y + 44, 17, 13, OCHRE)
     # flame over the roof
-    cv.poly([(x + 30, y + 18), (x + 42, y - 8), (x + 49, y + 4),
-             (x + 58, y - 4), (x + 60, y + 18)], ORANGE)
-    cv.poly([(x + 38, y + 18), (x + 45, y + 2), (x + 53, y + 18)], RED)
+    pg.shape([(x + 30, y + 18), (x + 42, y - 8), (x + 49, y + 4),
+              (x + 58, y - 4), (x + 60, y + 18)], AMBER)
+    pg.shape([(x + 38, y + 18), (x + 45, y + 2), (x + 53, y + 18)], CRIMSON)
     # rescue light dots along the ground
-    cv.disc(x + 12, y + 78, 5, BLUE)
-    cv.disc(x + 46, y + 78, 5, RED)
-    cv.disc(x + 80, y + 78, 5, BLUE)
+    pg.dot(x + 12, y + 78, 5, AZURE)
+    pg.dot(x + 46, y + 78, 5, CRIMSON)
+    pg.dot(x + 80, y + 78, 5, AZURE)
 
 
-def icon_chess(cv, x, y):
+def draw_chess(pg, x, y):
     # chess king: cross, crown ball, tapered body and base in a 92x80
     # box, with a small pawn standing beside it
-    cv.rect(x + 41, y, 10, 18, INK)
-    cv.rect(x + 35, y + 5, 22, 8, INK)
-    cv.disc(x + 46, y + 27, 9, GOLD)
-    cv.poly([(x + 35, y + 35), (x + 57, y + 35), (x + 63, y + 58),
-             (x + 29, y + 58)], NAVY)
-    cv.rect(x + 25, y + 58, 42, 7, INK)
-    cv.disc(x + 78, y + 38, 6, RED)
-    cv.poly([(x + 72, y + 46), (x + 84, y + 46), (x + 87, y + 58),
-             (x + 69, y + 58)], TEAL)
-    cv.rect(x + 68, y + 58, 20, 7, INK)
+    pg.box(x + 41, y, 10, 18, BLACK)
+    pg.box(x + 35, y + 5, 22, 8, BLACK)
+    pg.dot(x + 46, y + 27, 9, OCHRE)
+    pg.shape([(x + 35, y + 35), (x + 57, y + 35), (x + 63, y + 58),
+              (x + 29, y + 58)], MARINE)
+    pg.box(x + 25, y + 58, 42, 7, BLACK)
+    pg.dot(x + 78, y + 38, 6, CRIMSON)
+    pg.shape([(x + 72, y + 46), (x + 84, y + 46), (x + 87, y + 58),
+              (x + 69, y + 58)], PINE)
+    pg.box(x + 68, y + 58, 20, 7, BLACK)
 
 
 # --------------------------------------------------------------- layout
-def kicker_chip(cv, x, y, kicker, kcolour):
-    """Inverted colour chip holding the panel's kicker text."""
-    w = cv.text_width(kicker, 3) + 24
-    cv.rect(x + 3, y + 3, w, 32, kcolour)
-    cv.text(x + 15, y + 9, kicker, 3, PAPER, bold=True)
+def chip(pg, x, y, kicker, kcolour):
+    """Inverted colour chip holding the story's kicker text."""
+    w = pg.measure(kicker, 3) + 24
+    pg.box(x + 3, y + 3, w, 32, kcolour)
+    pg.type(x + 15, y + 9, kicker, 3, SHEET, bold=True)
     return w
 
 
-def panel(cv, x, y, w, h, kicker, kcolour, headline, subs,
-          icon=None, icon_dx=104):
-    cv.frame(x, y, w, h, INK, 3)
-    kicker_chip(cv, x, y, kicker, kcolour)
+def story(pg, x, y, w, h, kicker, kcolour, headline, subs,
+          mark=None, mark_dx=104):
+    pg.border(x, y, w, h, BLACK, 3)
+    chip(pg, x, y, kicker, kcolour)
     tx = x + 20
-    cv.text(tx, y + 46, headline, 4, INK, bold=True)
-    cv.text_block(tx, y + 98, subs, 3, INK, gap=1)
-    if icon is not None:
-        icon(cv, x + w - icon_dx, y + 14)
+    pg.type(tx, y + 46, headline, 4, BLACK, bold=True)
+    pg.type_lines(tx, y + 98, subs, 3, BLACK, gap=1)
+    if mark is not None:
+        mark(pg, x + w - mark_dx, y + 14)
 
 
-def build():
-    cv = Canvas(WIDTH, HEIGHT, PAPER)
+def compose():
+    pg = Poster(WIDTH, HEIGHT, SHEET)
 
     # masthead
-    cv.rect(28, 18, WIDTH - 56, 8, INK)
-    cv.text_centred(WIDTH // 2, 36, "THE WORLD IN ONE DAY", 7, NAVY, bold=True)
-    cv.text_centred(WIDTH // 2, 94, "TUESDAY 24 NOVEMBER 2026", 4, RED, bold=True)
-    cv.rect(28, 130, WIDTH - 56, 4, INK)
-    cv.rect(28, 138, WIDTH - 56, 2, INK)
+    pg.box(28, 18, WIDTH - 56, 8, BLACK)
+    pg.type_mid(WIDTH // 2, 36, "THE WORLD IN ONE DAY", 7, MARINE, bold=True)
+    pg.type_mid(WIDTH // 2, 94, "TUESDAY 24 NOVEMBER 2026", 4, CRIMSON, bold=True)
+    pg.box(28, 130, WIDTH - 56, 4, BLACK)
+    pg.box(28, 138, WIDTH - 56, 2, BLACK)
 
     # lead story: the world reacts to the COP31 collapse
-    lx, ly, lw, lh = 28, 148, WIDTH - 56, 290
-    cv.frame(lx, ly, lw, lh, INK, 4)
-    kicker_chip(cv, lx, ly, "ANTALYA, TURKIYE - THE MORNING AFTER", RED)
-    cv.text(lx + 22, ly + 48, "COP31: THE WORLD", 5, INK, bold=True)
-    cv.text(lx + 22, ly + 90, "REACTS IN ANGER - DAY TWO", 4,
-            NAVY, bold=True)
-    icon_globe(cv, lx + lw - 64, ly + 82, 30)
-    cv.text_block(lx + 22, ly + 126, [
+    lx, ly, lw = 28, 148, WIDTH - 56
+    pg.border(lx, ly, lw, 290, BLACK, 4)
+    chip(pg, lx, ly, "ANTALYA, TURKIYE - THE MORNING AFTER", CRIMSON)
+    pg.type(lx + 22, ly + 48, "COP31: THE WORLD", 5, BLACK, bold=True)
+    pg.type(lx + 22, ly + 90, "REACTS IN ANGER - DAY TWO", 4,
+            MARINE, bold=True)
+    draw_globe(pg, lx + lw - 64, ly + 82, 30)
+    pg.type_lines(lx + 22, ly + 126, [
         "A DAY OF FURY AFTER THE LONGEST SUMMIT",
         "EVER ENDS WITH NO DEAL. GUTERRES SAYS HE",
         "IS DEEPLY DISAPPOINTED. THE EU: THIS COP",
@@ -292,10 +293,10 @@ def build():
         "WORLD IS HELD HOSTAGE BY THE PETROLEUM",
         "MAFIA. ADOW: THE WORST COP EVER - A WAKE-UP",
         "CALL. ISLAND NATIONS REFUSED TO SIGN.",
-    ], 3, INK, gap=1)
+    ], 3, BLACK, gap=1)
 
     # middle row: Banten and Hormuz
-    panel(cv, 28, 446, 474, 240, "CIKANDE, BANTEN", ORANGE,
+    story(pg, 28, 446, 474, 240, "CIKANDE, BANTEN", AMBER,
           "FIRE KILLS 24",
           ["24 DEAD ARE CONFIRMED IN",
            "THE CANDY FACTORY BLAZE;",
@@ -303,8 +304,8 @@ def build():
            "RUINS. DNA TESTS TO NAME",
            "THE DEAD. A SAFETY PROBE",
            "OPENS INTO PT FONUSA."],
-          icon=icon_factory)
-    panel(cv, 522, 446, 474, 240, "STRAIT OF HORMUZ", RED,
+          mark=draw_factory)
+    story(pg, 522, 446, 474, 240, "STRAIT OF HORMUZ", CRIMSON,
           "OIL SLIDES",
           ["BRENT FALLS TO $89.37 -",
            "LOWEST SINCE AUGUST - AS",
@@ -312,10 +313,10 @@ def build():
            "TRUMP EYES NEW STRIKES",
            "IRAN AFTER NEW YEAR. THE",
            "OPEC+ MEETS ON SUNDAY."],
-          icon=icon_tanker, icon_dx=84)
+          mark=draw_tanker, mark_dx=84)
 
     # lower row: Kyiv and Geneva
-    panel(cv, 28, 694, 474, 250, "KYIV REGION", BLUE,
+    story(pg, 28, 694, 474, 250, "KYIV REGION", AZURE,
           "STRIKES GO ON",
           ["FRESH DRONE + MISSILE",
            "STRIKES HIT KYIV REGION.",
@@ -323,8 +324,8 @@ def build():
            "MISSING ARE FEARED DEAD.",
            "AT SEA, THE SPARTA II",
            "CARGO SHIP STILL BURNS."],
-          icon=icon_block)
-    panel(cv, 522, 694, 474, 250, "GENEVA - GAME ONE", GOLD,
+          mark=draw_block)
+    story(pg, 522, 694, 474, 250, "GENEVA - GAME ONE", OCHRE,
           "TITLE MATCH",
           ["THE WORLD CHESS TITLE",
            "MATCH OPENS TODAY: THE",
@@ -332,32 +333,32 @@ def build():
            "INDIA, FACES JAVOKHIR",
            "SINDAROV OF UZBEKISTAN",
            "IN GAME ONE IN GENEVA."],
-          icon=icon_chess)
+          mark=draw_chess)
 
-    # bottom strip: the Ayodhya-Janankpur train, tennis and cricket
-    cv.rect(28, 948, WIDTH - 56, 3, INK)
-    cv.text(28, 954, "INDIA-NEPAL: MODI + SHAH FLAG OFF SARYU-KAMALA EXPRESS, AYODHYA-JANAKPUR.", 2, INK)
-    cv.text(28, 969, "TENNIS: ALCARAZ BEATS ZVEREV IN TURIN TO WIN HIS FIRST ATP FINALS TITLE.", 2, INK)
-    cv.text(28, 984, "CRICKET: PANT HITS 128 AS INDIA DRAW WITH NEW ZEALAND AT WELLINGTON.", 2, INK)
+    # bottom strip: the Ayodhya-Janakpur train, tennis and cricket
+    pg.box(28, 948, WIDTH - 56, 3, BLACK)
+    pg.type(28, 954, "INDIA-NEPAL: MODI + SHAH FLAG OFF SARYU-KAMALA EXPRESS, AYODHYA-JANAKPUR.", 2, BLACK)
+    pg.type(28, 969, "TENNIS: ALCARAZ BEATS ZVEREV IN TURIN TO WIN HIS FIRST ATP FINALS TITLE.", 2, BLACK)
+    pg.type(28, 984, "CRICKET: PANT HITS 128 AS INDIA DRAW WITH NEW ZEALAND AT WELLINGTON.", 2, BLACK)
 
     # footer
-    cv.text_centred(WIDTH // 2, 1002, "ANTALYA - BANTEN - HORMUZ - KYIV - GENEVA - TURIN - WELLINGTON - JANAKPUR", 2, NAVY, bold=True)
-    return cv
+    pg.type_mid(WIDTH // 2, 1002, "ANTALYA - BANTEN - HORMUZ - KYIV - GENEVA - TURIN - WELLINGTON - JANAKPUR", 2, MARINE, bold=True)
+    return pg
 
 
-def encode_png(cv):
+def pack_png(pg):
     raw = bytearray()
-    stride = cv.w * 3
-    for yy in range(cv.h):
+    stride = pg.w * 3
+    for yy in range(pg.h):
         raw.append(0)
-        raw += cv.px[yy * stride:(yy + 1) * stride]
+        raw += pg.pix[yy * stride:(yy + 1) * stride]
 
     def chunk(tag, data):
         out = struct.pack(">I", len(data)) + tag + data
         out += struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
         return out
 
-    ihdr = struct.pack(">IIBBBBB", cv.w, cv.h, 8, 2, 0, 0, 0)
+    ihdr = struct.pack(">IIBBBBB", pg.w, pg.h, 8, 2, 0, 0, 0)
     png = b"\x89PNG\r\n\x1a\n"
     png += chunk(b"IHDR", ihdr)
     png += chunk(b"IDAT", zlib.compress(bytes(raw), 9))
@@ -368,7 +369,7 @@ def encode_png(cv):
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.environ.get(
         "ENTRY_OUT", "/output/entry.png")
-    data = encode_png(build())
+    data = pack_png(compose())
     folder = os.path.dirname(out)
     if folder:
         try:
